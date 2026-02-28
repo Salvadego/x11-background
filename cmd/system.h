@@ -5,9 +5,13 @@
 #include "math.h"
 #include "types.h"
 #include "utils.h"
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
 #include <limits.h>
 #include <math.h>
+#define Font RayFont
 #include <raylib.h>
+#undef Font
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -272,6 +276,9 @@ static inline void ParticlesUpdate(System *restrict s) {
         FloatArray restrict vy_arr = p->vy;
         IntArray restrict col_arr  = p->colors;
 
+        const float margin        = appConfig.margin;
+        const float wall_strength = appConfig.wall_strength;
+
         Grid       *g        = s->grid;
         const float max_r2   = appConfig.max_radius * appConfig.max_radius;
         const float invMaxR2 = 1.0f / max_r2;
@@ -295,15 +302,19 @@ static inline void ParticlesUpdate(System *restrict s) {
                                 int nx = (int)cx + dx;
                                 int ny = (int)cy + dy;
 
-                                if (nx < 0)
-                                        nx += g->cols;
-                                if (nx >= (int)g->cols)
-                                        nx -= g->cols;
+                                // if (nx < 0)
+                                //         nx += g->cols;
+                                // if (nx >= (int)g->cols)
+                                //         nx -= g->cols;
 
-                                if (ny < 0)
-                                        ny += g->rows;
-                                if (ny >= (int)g->rows)
-                                        ny -= g->rows;
+                                // if (ny < 0)
+                                //         ny += g->rows;
+                                // if (ny >= (int)g->rows)
+                                //         ny -= g->rows;
+
+                                if (nx < 0 || nx >= (int)g->cols || ny < 0 ||
+                                    ny >= (int)g->rows)
+                                        continue;
 
                                 const size_t neighbor_cell = ny * g->cols + nx;
 
@@ -322,15 +333,15 @@ static inline void ParticlesUpdate(System *restrict s) {
                                         float rx = px_arr[j] - xi;
                                         float ry = py_arr[j] - yi;
 
-                                        if (rx > 0.5f)
-                                                rx -= 1.0f;
-                                        if (rx < -0.5f)
-                                                rx += 1.0f;
+                                        // if (rx > 0.5f)
+                                        //         rx -= 1.0f;
+                                        // if (rx < -0.5f)
+                                        //         rx += 1.0f;
 
-                                        if (ry > 0.5f)
-                                                ry -= 1.0f;
-                                        if (ry < -0.5f)
-                                                ry += 1.0f;
+                                        // if (ry > 0.5f)
+                                        //         ry -= 1.0f;
+                                        // if (ry < -0.5f)
+                                        //         ry += 1.0f;
                                         const float dist2 = rx * rx + ry * ry;
 
                                         if (dist2 > 0 && dist2 < max_r2) {
@@ -361,6 +372,24 @@ static inline void ParticlesUpdate(System *restrict s) {
                 totalForceX *= appConfig.max_radius * appConfig.force_factor;
                 totalForceY *= appConfig.max_radius * appConfig.force_factor;
 
+                float bx = 0.0f;
+                float by = 0.0f;
+
+                if (xi < margin)
+                        bx += (margin - xi) * wall_strength;
+
+                if (xi > 1.0f - margin)
+                        bx -= (xi - (1.0f - margin)) * wall_strength;
+
+                if (yi < margin)
+                        by += (margin - yi) * wall_strength;
+
+                if (yi > 1.0f - margin)
+                        by -= (yi - (1.0f - margin)) * wall_strength;
+
+                totalForceX += bx;
+                totalForceY += by;
+
                 vx_arr[i] *= appConfig.damping;
                 vy_arr[i] *= appConfig.damping;
 
@@ -373,32 +402,43 @@ static inline void ParticlesUpdate(System *restrict s) {
                 px_arr[i] += vx_arr[i] * appConfig.dt;
                 py_arr[i] += vy_arr[i] * appConfig.dt;
 
-                if (px_arr[i] < 0.0f)
-                        px_arr[i] += 1.0f;
-                if (px_arr[i] >= 1.0f)
-                        px_arr[i] -= 1.0f;
+                // if (px_arr[i] >= 1.0f)
+                //         px_arr[i] -= 1.0f;
 
-                if (py_arr[i] < 0.0f)
-                        py_arr[i] += 1.0f;
-                if (py_arr[i] >= 1.0f)
-                        py_arr[i] -= 1.0f;
+                // if (px_arr[i] < 0.0f)
+                //         px_arr[i] += 1.0f;
+                // if (px_arr[i] >= 1.0f)
+                //         px_arr[i] -= 1.0f;
+
+                // if (py_arr[i] < 0.0f)
+                //         py_arr[i] += 1.0f;
+                // if (py_arr[i] >= 1.0f || py_arr[i] <= 0.0f)
+                //         py_arr[i] -= 1.0f;
         }
 }
 
-static inline void ParticlesDraw(System *s) {
-        for (size_t i = 0; i < s->count; ++i) {
-                const int screenX =
-                    (int)(px(s, i) * (float)appConfig.window_width);
-                const int screenY =
-                    (int)(py(s, i) * (float)appConfig.window_height);
+static inline unsigned long ColorToPixel(Color c) {
+        return ((unsigned long)c.r << 16) | ((unsigned long)c.g << 8) |
+               ((unsigned long)c.b);
+}
 
-                float hue = 360 * ((float)pcolor(s, i) / (float)s->types_count);
-                Color color = ColorFromHSV(hue, 0.8, 1.0);
-                DrawRectangle(screenX,
-                              screenY,
-                              appConfig.particle_size,
-                              appConfig.particle_size,
-                              color);
+static inline void ParticlesDraw(Display *dpy, GC gc, Pixmap pm, System *s) {
+        int width  = appConfig.window_width;
+        int height = appConfig.window_height;
+        for (size_t i = 0; i < s->count; ++i) {
+                int   screenX = (int)(px(s, i) * (float)width);
+                int   screenY = (int)(py(s, i) * (float)height);
+                float hue =
+                    300.0f * ((float)pcolor(s, i) / (float)s->types_count);
+                Color color = ColorFromHSV(hue, 1.0f, 1.0f);
+                XSetForeground(dpy, gc, ColorToPixel(color));
+                XFillRectangle(dpy,
+                               pm,
+                               gc,
+                               screenX,
+                               screenY,
+                               appConfig.particle_size,
+                               appConfig.particle_size);
         }
 }
 

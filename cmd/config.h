@@ -29,25 +29,31 @@ struct {
         const float damping;
         const float force_factor;
         const float cell_size;
+        const float margin;
+        const float wall_strength;
 
         size_t       particles_count;
         const int    particle_size;
         const size_t particles_type_count;
 } appConfig = {
-    .window_width  = 800,
-    .window_height = 600,
+    .window_width  = 1366,
+    .window_height = 720,
     .window_title  = "Particles",
     .target_fps    = 60,
 
-    .max_radius   = 0.04,
-    .dt           = 0.016,
-    .half_life    = 0.040,
-    .damping      = 0.98,
-    .force_factor = 3,
+    .dt        = 0.016,
+    .half_life = 0.030,
+    .damping   = 0.98,
 
-    .particles_count      = 5000,
-    .particle_size        = 1,
-    .particles_type_count = 5,
+    .margin        = 0.03f,
+    .wall_strength = 5.0f,
+
+    .max_radius           = 0.07,
+    .force_factor         = 2,
+    .particles_count      = 3000,
+    .particles_type_count = 4,
+
+    .particle_size = 2,
 };
 
 #endif /* end of include guard: CONFIG_H_YDHSECZA */
