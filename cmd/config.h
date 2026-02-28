@@ -39,13 +39,13 @@ struct {
     .window_title  = "Particles",
     .target_fps    = 60,
 
-    .max_radius   = 0.08,
+    .max_radius   = 0.04,
     .dt           = 0.016,
     .half_life    = 0.040,
     .damping      = 0.98,
-    .force_factor = 1,
+    .force_factor = 3,
 
-    .particles_count      = 3000,
+    .particles_count      = 5000,
     .particle_size        = 1,
     .particles_type_count = 5,
 };

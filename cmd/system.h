@@ -13,8 +13,8 @@
 #include <stdlib.h>
 
 typedef struct {
-        IntArrayList   colors;
-        FloatArrayList x, y, z, vx, vy, vz;
+        IntArray   colors;
+        FloatArray x, y, z, vx, vy, vz;
 } Particles;
 
 #define px(s, i)     (s)->particles->x[(i)]
@@ -45,11 +45,11 @@ typedef struct {
 } GridStats;
 
 typedef struct {
-        Particles     *particles;
-        FloatArrayList matrix;
-        size_t         count;
-        size_t         types_count;
-        Grid          *grid;
+        Particles *particles;
+        FloatArray matrix;
+        size_t     count;
+        size_t     types_count;
+        Grid      *grid;
 } System;
 
 GridStats ComputeGridStats(System *s) {
@@ -109,13 +109,14 @@ float GetRandomFloatValue(void) {
         return (float)GetRandomValue(0, INT_MAX) / (float)INT_MAX;
 }
 
-FloatArrayList makeRandomMatrix(Arena *a, size_t types_count) {
-        size_t         size = types_count * types_count;
-        FloatArrayList rows = arr_new_cap(a, size, float);
+FloatArray makeRandomMatrix(Arena *a, size_t types_count) {
+        size_t     size = types_count * types_count;
+        FloatArray rows =
+            arena_alloc(a, size * sizeof(float), AlignOfType(float));
 
         for (size_t i = 0; i < size; ++i) {
                 float rv = GetRandomFloatValue() * 2 - 1;
-                arr_append(rows, rv);
+                rows[i]  = rv;
         }
 
         return rows;
@@ -203,29 +204,30 @@ void InitParticles(Arena     *arena,
                    Particles *p,
                    size_t     count,
                    size_t     types_count) {
-        p->colors = arr_new_cap(arena, count, int);
-        p->x      = arr_new_cap(arena, count, float);
-        p->y      = arr_new_cap(arena, count, float);
-        p->z      = arr_new_cap(arena, count, float);
-        p->vx     = arr_new_cap(arena, count, float);
-        p->vy     = arr_new_cap(arena, count, float);
-        p->vz     = arr_new_cap(arena, count, float);
+
+        p->colors = arena_alloc(arena, count * sizeof(int), AlignOfType(int));
+        p->x  = arena_alloc(arena, count * sizeof(float), AlignOfType(float));
+        p->y  = arena_alloc(arena, count * sizeof(float), AlignOfType(float));
+        p->z  = arena_alloc(arena, count * sizeof(float), AlignOfType(float));
+        p->vx = arena_alloc(arena, count * sizeof(float), AlignOfType(float));
+        p->vy = arena_alloc(arena, count * sizeof(float), AlignOfType(float));
+        p->vz = arena_alloc(arena, count * sizeof(float), AlignOfType(float));
 
         for (size_t i = 0; i < count; ++i) {
-                int color = GetRandomValue(0, types_count);
-                arr_append(p->colors, color);
+                int color    = GetRandomValue(0, types_count);
+                p->colors[i] = color;
 
                 float rx = GetRandomFloatValue();
                 float ry = GetRandomFloatValue();
                 float rz = GetRandomFloatValue();
+                float z  = 0.0f;
 
-                float z = 0.0f;
-                arr_append(p->x, rx);
-                arr_append(p->y, ry);
-                arr_append(p->z, rz);
-                arr_append(p->vx, z);
-                arr_append(p->vy, z);
-                arr_append(p->vz, z);
+                p->x[i]  = rx;
+                p->y[i]  = ry;
+                p->z[i]  = rz;
+                p->vx[i] = z;
+                p->vy[i] = z;
+                p->vz[i] = z;
         }
 }
 
@@ -262,13 +264,13 @@ static inline void ParticlesUpdate(System *restrict s) {
         // GridStats stats = ComputeGridStats(s);
         // PrintGridStats(stats);
 
-        Particles *restrict p          = s->particles;
-        FloatArrayList restrict matrix = s->matrix;
-        FloatArrayList restrict px_arr = p->x;
-        FloatArrayList restrict py_arr = p->y;
-        FloatArrayList restrict vx_arr = p->vx;
-        FloatArrayList restrict vy_arr = p->vy;
-        IntArrayList restrict col_arr  = p->colors;
+        Particles *restrict p      = s->particles;
+        FloatArray restrict matrix = s->matrix;
+        FloatArray restrict px_arr = p->x;
+        FloatArray restrict py_arr = p->y;
+        FloatArray restrict vx_arr = p->vx;
+        FloatArray restrict vy_arr = p->vy;
+        IntArray restrict col_arr  = p->colors;
 
         Grid       *g        = s->grid;
         const float max_r2   = appConfig.max_radius * appConfig.max_radius;

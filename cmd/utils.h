@@ -75,7 +75,7 @@ typedef struct {
 
 #define arr_header(v) ((arr_header_t *)(v) - 1)
 
-static void *
+static inline void *
 arr_new_impl(Arena *arena, size_t cap, size_t elem_size, size_t align) {
         size_t header_size = sizeof(arr_header_t);
         size_t data_size   = elem_size * cap;
