@@ -5,19 +5,6 @@
 #include <stdint.h>
 #include <x86intrin.h>
 
-static inline uint64_t rdtsc_begin(void) {
-        _mm_lfence();
-        return __rdtsc();
-}
-
-static inline uint64_t rdtsc_end(void) {
-        uint64_t t = __rdtsc();
-        _mm_lfence();
-        return t;
-}
-
-static uint64_t interaction_count = 0;
-
 struct {
         int         window_width, window_height;
         const char *window_title;

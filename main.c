@@ -60,18 +60,20 @@ draw(Display *dpy, Window root, GC gc, Pixmap pm, System *system) {
 }
 
 int main(void) {
-        Arena arena = arena_create(Megabytes(200));
+        Arena arena      = arena_create(Megabytes(200));
+        Arena temp_arena = arena_create(Megabytes(200));
 
+        SetRandomSeed((unsigned int)time(NULL));
         Particles particles = {0};
         Grid      grid      = {0};
         System    system    = {0};
         InitSystem(&arena,
+                   &temp_arena,
                    &system,
                    &particles,
                    &grid,
                    appConfig.particles_count,
                    appConfig.particles_type_count);
-        SetRandomSeed((unsigned int)time(NULL));
 
         Display *dpy = XOpenDisplay(NULL);
         if (!dpy) {

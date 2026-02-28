@@ -33,20 +33,11 @@ typedef struct {
         size_t cols, rows;
         float  cell_size;
 
+        size_t total_cells;
+
         IntArray cell_start;
         IntArray cell_count;
-        IntArray indices;
 } Grid;
-
-typedef struct {
-        size_t total_particles;
-        size_t total_cells;
-        size_t non_empty_cells;
-        size_t max_particles_in_cell;
-        float  avg_particles_per_cell;
-        float  avg_particles_per_nonempty_cell;
-        size_t estimated_interactions_per_frame;
-} GridStats;
 
 typedef struct {
         Particles *particles;
@@ -54,63 +45,11 @@ typedef struct {
         size_t     count;
         size_t     types_count;
         Grid      *grid;
+        Arena     *temp_arena;
 } System;
 
-GridStats ComputeGridStats(System *s) {
-        GridStats stats = {0};
-
-        Grid  *g           = s->grid;
-        size_t total_cells = g->cols * g->rows;
-
-        stats.total_particles = s->count;
-        stats.total_cells     = total_cells;
-
-        size_t total_particles_in_cells = 0;
-
-        for (size_t c = 0; c < total_cells; ++c) {
-
-                int count = g->cell_count[c];
-
-                if (count > 0)
-                        stats.non_empty_cells++;
-
-                if ((size_t)count > stats.max_particles_in_cell)
-                        stats.max_particles_in_cell = count;
-
-                total_particles_in_cells += count;
-        }
-
-        stats.avg_particles_per_cell =
-            (float)total_particles_in_cells / (float)total_cells;
-
-        if (stats.non_empty_cells > 0)
-                stats.avg_particles_per_nonempty_cell =
-                    (float)total_particles_in_cells /
-                    (float)stats.non_empty_cells;
-
-        float avg_neighbors = stats.avg_particles_per_cell * 9.0f;
-
-        stats.estimated_interactions_per_frame =
-            (size_t)(avg_neighbors * (float)s->count);
-
-        return stats;
-}
-
-void PrintGridStats(GridStats s) {
-        printf("Particles: %zu\n", s.total_particles);
-        printf("Total cells: %zu\n", s.total_cells);
-        printf("Non-empty cells: %zu\n", s.non_empty_cells);
-        printf("Max per cell: %zu\n", s.max_particles_in_cell);
-        printf("Avg per cell: %.2f\n", s.avg_particles_per_cell);
-        printf("Avg per non-empty cell: %.2f\n",
-               s.avg_particles_per_nonempty_cell);
-        printf("Estimated interactions/frame: %zu\n",
-               s.estimated_interactions_per_frame);
-        printf("-------------------------------------------------\n");
-}
-
 float GetRandomFloatValue(void) {
-        return (float)GetRandomValue(0, INT_MAX) / (float)INT_MAX;
+        return (float)GetRandomValue(0, 100) / (float)100;
 }
 
 FloatArray makeRandomMatrix(Arena *a, size_t types_count) {
@@ -126,7 +65,7 @@ FloatArray makeRandomMatrix(Arena *a, size_t types_count) {
         return rows;
 }
 
-void InitGrid(Arena *arena, Grid *g, size_t particle_count, float cell_size) {
+void InitGrid(Arena *arena, Grid *g, float cell_size) {
         g->cell_size = cell_size;
 
         g->cols = (size_t)(1.0f / cell_size) + 1;
@@ -134,14 +73,11 @@ void InitGrid(Arena *arena, Grid *g, size_t particle_count, float cell_size) {
 
         size_t total_cells = g->cols * g->rows;
 
+        g->total_cells = total_cells;
         g->cell_start =
             arena_alloc(arena, total_cells * sizeof(int), AlignOfType(int));
-
         g->cell_count =
             arena_alloc(arena, total_cells * sizeof(int), AlignOfType(int));
-
-        g->indices =
-            arena_alloc(arena, particle_count * sizeof(int), AlignOfType(int));
 }
 
 static inline size_t GridIndex(Grid *g, float x, float y) {
@@ -157,51 +93,51 @@ static inline size_t GridIndex(Grid *g, float x, float y) {
 }
 
 void GridBuild(System *s) {
-        Grid  *g           = s->grid;
-        size_t total_cells = g->cols * g->rows;
+        Grid      *g    = s->grid;
+        Particles *p    = s->particles;
+        Arena     *temp = s->temp_arena;
+        size_t     n    = s->count;
 
-        memset(g->cell_count, 0, total_cells * sizeof(int));
-
-        // Count
-        for (size_t i = 0; i < s->count; ++i) {
-
-                size_t cx = (size_t)(s->particles->x[i] / g->cell_size);
-                size_t cy = (size_t)(s->particles->y[i] / g->cell_size);
-
-                if (cx >= g->cols)
-                        cx = g->cols - 1;
-                if (cy >= g->rows)
-                        cy = g->rows - 1;
-
-                size_t cell = cy * g->cols + cx;
-
+        memset(g->cell_count, 0, sizeof(int) * g->total_cells);
+        for (size_t i = 0; i < n; ++i) {
+                size_t cell = GridIndex(g, p->x[i], p->y[i]);
                 g->cell_count[cell]++;
         }
 
-        // Prefix sum
         int sum = 0;
-        for (size_t c = 0; c < total_cells; ++c) {
+        for (size_t c = 0; c < g->total_cells; ++c) {
                 g->cell_start[c] = sum;
                 sum += g->cell_count[c];
                 g->cell_count[c] = 0;
         }
 
-        // Fill
-        for (size_t i = 0; i < s->count; ++i) {
+        float *tmp_x = arena_alloc(temp, sizeof(float) * n, AlignOfType(float));
+        float *tmp_y = arena_alloc(temp, sizeof(float) * n, AlignOfType(float));
+        float *tmp_vx =
+            arena_alloc(temp, sizeof(float) * n, AlignOfType(float));
+        float *tmp_vy =
+            arena_alloc(temp, sizeof(float) * n, AlignOfType(float));
+        int *tmp_c = arena_alloc(temp, sizeof(int) * n, AlignOfType(int));
 
-                size_t cx = (size_t)(s->particles->x[i] / g->cell_size);
-                size_t cy = (size_t)(s->particles->y[i] / g->cell_size);
+        if (!tmp_x || !tmp_y || !tmp_vx || !tmp_vy || !tmp_c)
+                return;
 
-                if (cx >= g->cols)
-                        cx = g->cols - 1;
-                if (cy >= g->rows)
-                        cy = g->rows - 1;
+        for (size_t i = 0; i < n; ++i) {
+                size_t cell = GridIndex(g, p->x[i], p->y[i]);
+                int    dst  = g->cell_start[cell] + g->cell_count[cell]++;
 
-                size_t cell = cy * g->cols + cx;
-
-                int index         = g->cell_start[cell] + g->cell_count[cell]++;
-                g->indices[index] = (int)i;
+                tmp_x[dst]  = p->x[i];
+                tmp_y[dst]  = p->y[i];
+                tmp_vx[dst] = p->vx[i];
+                tmp_vy[dst] = p->vy[i];
+                tmp_c[dst]  = p->colors[i];
         }
+
+        memcpy(p->x, tmp_x, sizeof(float) * n);
+        memcpy(p->y, tmp_y, sizeof(float) * n);
+        memcpy(p->vx, tmp_vx, sizeof(float) * n);
+        memcpy(p->vy, tmp_vy, sizeof(float) * n);
+        memcpy(p->colors, tmp_c, sizeof(int) * n);
 }
 
 void InitParticles(Arena     *arena,
@@ -236,19 +172,22 @@ void InitParticles(Arena     *arena,
 }
 
 void InitSystem(Arena     *arena,
+                Arena     *temp_arena,
                 System    *s,
                 Particles *p,
                 Grid      *g,
                 size_t     count,
                 size_t     types_count) {
+
         s->matrix      = makeRandomMatrix(arena, types_count);
         s->particles   = p;
         s->grid        = g;
+        s->temp_arena  = temp_arena;
         s->count       = count;
         s->types_count = types_count;
 
         InitParticles(arena, p, count, types_count);
-        InitGrid(arena, g, count, appConfig.max_radius);
+        InitGrid(arena, g, appConfig.max_radius);
 }
 
 static inline float calcForce(float r, float a) {
@@ -262,104 +201,85 @@ static inline float calcForce(float r, float a) {
         }
 }
 
-static inline void ParticlesUpdate(System *restrict s) {
+static inline void ParticlesUpdate(System *s) {
+        arena_reset(s->temp_arena);
         GridBuild(s);
 
-        // GridStats stats = ComputeGridStats(s);
-        // PrintGridStats(stats);
+        Grid *g = s->grid;
 
-        Particles *restrict p      = s->particles;
-        FloatArray restrict matrix = s->matrix;
-        FloatArray restrict px_arr = p->x;
-        FloatArray restrict py_arr = p->y;
-        FloatArray restrict vx_arr = p->vx;
-        FloatArray restrict vy_arr = p->vy;
-        IntArray restrict col_arr  = p->colors;
+        // clang-format off
+        static const int neighbor_offsets[9][2] = {
+            {-1, -1}, { 0, -1}, { 1, -1},
+            {-1,  0}, { 0,  0}, { 1,  0},
+            {-1,  1}, { 0,  1}, { 1,  1}
+        };
+        // clang-format on
 
         const float margin        = appConfig.margin;
         const float wall_strength = appConfig.wall_strength;
+        const float max_r         = appConfig.max_radius;
+        const float max_r2        = max_r * max_r;
+        const float invMaxR2      = 1.0f / max_r2;
 
-        Grid       *g        = s->grid;
-        const float max_r2   = appConfig.max_radius * appConfig.max_radius;
-        const float invMaxR2 = 1.0f / max_r2;
+        // -------------------------------------------------
+        // Iterate by cell
+        // -------------------------------------------------
+        for (size_t cell = 0; cell < g->total_cells; ++cell) {
 
-        for (size_t i = 0; i < s->count; ++i) {
-                float totalForceX = 0.0f;
-                float totalForceY = 0.0f;
+                int start_i = g->cell_start[cell];
+                int count_i = g->cell_count[cell];
+                if (count_i == 0)
+                        continue;
 
-                size_t      cx = (size_t)(px_arr[i] / g->cell_size);
-                size_t      cy = (size_t)(py_arr[i] / g->cell_size);
-                const float xi = px_arr[i];
-                const float yi = py_arr[i];
-                if (cx >= g->cols)
-                        cx = g->cols - 1;
-                if (cy >= g->rows)
-                        cy = g->rows - 1;
+                int cx = cell % g->cols;
+                int cy = cell / g->cols;
 
-                for (int dy = -1; dy <= 1; ++dy) {
-                        for (int dx = -1; dx <= 1; ++dx) {
+                for (int ii = 0; ii < count_i; ++ii) {
 
-                                int nx = (int)cx + dx;
-                                int ny = (int)cy + dy;
+                        int i = start_i + ii;
 
-                                // if (nx < 0)
-                                //         nx += g->cols;
-                                // if (nx >= (int)g->cols)
-                                //         nx -= g->cols;
+                        float totalForceX = 0.0f;
+                        float totalForceY = 0.0f;
 
-                                // if (ny < 0)
-                                //         ny += g->rows;
-                                // if (ny >= (int)g->rows)
-                                //         ny -= g->rows;
+                        float xi = px(s, i);
+                        float yi = py(s, i);
+
+                        int    color_i = pcolor(s, i);
+                        float *row     = &s->matrix[color_i * s->types_count];
+
+                        for (int n = 0; n < 9; ++n) {
+
+                                int nx = cx + neighbor_offsets[n][0];
+                                int ny = cy + neighbor_offsets[n][1];
 
                                 if (nx < 0 || nx >= (int)g->cols || ny < 0 ||
                                     ny >= (int)g->rows)
                                         continue;
 
-                                const size_t neighbor_cell = ny * g->cols + nx;
+                                size_t neighbor_cell = ny * g->cols + nx;
 
-                                const int start = g->cell_start[neighbor_cell];
-                                const int count = g->cell_count[neighbor_cell];
+                                int start_j = g->cell_start[neighbor_cell];
+                                int count_j = g->cell_count[neighbor_cell];
 
-                                for (int k = 0; k < count; ++k) {
+                                for (int jj = 0; jj < count_j; ++jj) {
 
-                                        const int j = g->indices[start + k];
-
-                                        if ((size_t)j == i)
+                                        int j = start_j + jj;
+                                        if (j == i)
                                                 continue;
 
-                                        interaction_count++;
+                                        float rx = px(s, j) - xi;
+                                        float ry = py(s, j) - yi;
 
-                                        float rx = px_arr[j] - xi;
-                                        float ry = py_arr[j] - yi;
+                                        float dist2 = rx * rx + ry * ry;
+                                        if (dist2 > 0.0f && dist2 < max_r2) {
 
-                                        // if (rx > 0.5f)
-                                        //         rx -= 1.0f;
-                                        // if (rx < -0.5f)
-                                        //         rx += 1.0f;
-
-                                        // if (ry > 0.5f)
-                                        //         ry -= 1.0f;
-                                        // if (ry < -0.5f)
-                                        //         ry += 1.0f;
-                                        const float dist2 = rx * rx + ry * ry;
-
-                                        if (dist2 > 0 && dist2 < max_r2) {
-                                                const int color_i = col_arr[i];
-                                                const float *row =
-                                                    &matrix[color_i *
-                                                            s->types_count];
-
-                                                const int color_j = col_arr[j];
-                                                const float relation =
-                                                    row[color_j];
-
-                                                const float r =
-                                                    dist2 * invMaxR2;
-                                                const float f =
+                                                float relation =
+                                                    row[pcolor(s, j)];
+                                                float r = dist2 * invMaxR2;
+                                                float f =
                                                     calcForce(r, relation);
 
-                                                const float invDist =
+                                                float invDist =
                                                     1.0f / sqrtf(dist2);
 
                                                 totalForceX += rx * invDist * f;
@@ -367,53 +287,39 @@ static inline void ParticlesUpdate(System *restrict s) {
                                         }
                                 }
                         }
+
+                        totalForceX *= max_r * appConfig.force_factor;
+                        totalForceY *= max_r * appConfig.force_factor;
+
+                        float bx = 0.0f;
+                        float by = 0.0f;
+
+                        if (xi < margin)
+                                bx += (margin - xi) * wall_strength;
+
+                        if (xi > 1.0f - margin)
+                                bx -= (xi - (1.0f - margin)) * wall_strength;
+
+                        if (yi < margin)
+                                by += (margin - yi) * wall_strength;
+
+                        if (yi > 1.0f - margin)
+                                by -= (yi - (1.0f - margin)) * wall_strength;
+
+                        totalForceX += bx;
+                        totalForceY += by;
+
+                        pvx(s, i) *= appConfig.damping;
+                        pvy(s, i) *= appConfig.damping;
+
+                        pvx(s, i) += totalForceX * appConfig.dt;
+                        pvy(s, i) += totalForceY * appConfig.dt;
                 }
-
-                totalForceX *= appConfig.max_radius * appConfig.force_factor;
-                totalForceY *= appConfig.max_radius * appConfig.force_factor;
-
-                float bx = 0.0f;
-                float by = 0.0f;
-
-                if (xi < margin)
-                        bx += (margin - xi) * wall_strength;
-
-                if (xi > 1.0f - margin)
-                        bx -= (xi - (1.0f - margin)) * wall_strength;
-
-                if (yi < margin)
-                        by += (margin - yi) * wall_strength;
-
-                if (yi > 1.0f - margin)
-                        by -= (yi - (1.0f - margin)) * wall_strength;
-
-                totalForceX += bx;
-                totalForceY += by;
-
-                vx_arr[i] *= appConfig.damping;
-                vy_arr[i] *= appConfig.damping;
-
-                vx_arr[i] += totalForceX * appConfig.dt;
-                vy_arr[i] += totalForceY * appConfig.dt;
         }
 
-        // Integrate positions
         for (size_t i = 0; i < s->count; ++i) {
-                px_arr[i] += vx_arr[i] * appConfig.dt;
-                py_arr[i] += vy_arr[i] * appConfig.dt;
-
-                // if (px_arr[i] >= 1.0f)
-                //         px_arr[i] -= 1.0f;
-
-                // if (px_arr[i] < 0.0f)
-                //         px_arr[i] += 1.0f;
-                // if (px_arr[i] >= 1.0f)
-                //         px_arr[i] -= 1.0f;
-
-                // if (py_arr[i] < 0.0f)
-                //         py_arr[i] += 1.0f;
-                // if (py_arr[i] >= 1.0f || py_arr[i] <= 0.0f)
-                //         py_arr[i] -= 1.0f;
+                px(s, i) += pvx(s, i) * appConfig.dt;
+                py(s, i) += pvy(s, i) * appConfig.dt;
         }
 }
 
