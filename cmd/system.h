@@ -7,6 +7,7 @@
 #include "utils.h"
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <limits.h>
 #include <math.h>
 #define Font RayFont
@@ -328,24 +329,26 @@ static inline unsigned long ColorToPixel(Color c) {
                ((unsigned long)c.b);
 }
 
-static inline void ParticlesDraw(Display *dpy, GC gc, Pixmap pm, System *s) {
-        int width  = appConfig.window_width;
-        int height = appConfig.window_height;
-        for (size_t i = 0; i < s->count; ++i) {
-                int   screenX = (int)(px(s, i) * (float)width);
-                int   screenY = (int)(py(s, i) * (float)height);
-                float hue =
-                    300.0f * ((float)pcolor(s, i) / (float)s->types_count);
-                Color color = ColorFromHSV(hue, 1.0f, 1.0f);
-                XSetForeground(dpy, gc, ColorToPixel(color));
-                XFillRectangle(dpy,
-                               pm,
-                               gc,
-                               screenX,
-                               screenY,
-                               appConfig.particle_size,
-                               appConfig.particle_size);
-        }
-}
+static inline void ParticlesDraw(Display *dpy, GC gc, Window win, System *s) {
+        int           width  = appConfig.window_width;
+        int           height = appConfig.window_height;
+        unsigned int *pixels = (unsigned int *)appConfig.global_img->data;
 
-#endif /* end of include guard: SYSTEM_H_URBBF5FI */
+        memset(pixels, 0, width * height * 4);
+
+        for (size_t i = 0; i < s->count; ++i) {
+                int x = (int)(px(s, i) * (float)width);
+                int y = (int)(py(s, i) * (float)height);
+
+                if (x >= 0 && x < width && y >= 0 && y < height) {
+                        float hue             = 300.0f * ((float)pcolor(s, i) /
+                                              (float)s->types_count);
+                        Color color           = ColorFromHSV(hue, 1.0f, 1.0f);
+                        pixels[y * width + x] = ColorToPixel(color);
+                }
+        }
+
+        XPutImage(
+            dpy, win, gc, appConfig.global_img, 0, 0, 0, 0, width, height);
+}
+#endif
